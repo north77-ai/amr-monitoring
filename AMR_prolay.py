@@ -15,7 +15,7 @@ EXCEL = os.path.join(BASE_DIR, "received_files", "data.xlsx")
 INFLUX_URL = "https://us-east-1-1.aws.cloud2.influxdata.com"
 INFLUX_TOKEN = "AHRpHuPjeAOov_2Bz2LukBhTScKaEJzbVcUqAdjIg6kNNfViDCWjUVxsvSho-6HA9OycXDjGEg4KfLq0b11JLQ=="
 INFLUX_ORG = "AMR-Monitoring"
-INFLUX_BUCKET = "AMR_DATA_v2"
+INFLUX_BUCKET = "AMR_DATA"
 
 
 # =========================
@@ -33,18 +33,30 @@ def jobid(v):
     return v[:-2] if v.endswith(".0") and v[:-2].isdigit() else v
 
 
-def point_base(measurement, row, index):
-    jid = jobid(row["JOBID"]) or f"ROW_{index}"
+def col(df, *names):
+    for n in names:
+        for c in df.columns:
+            if str(c).strip().lower() == n.lower():
+                return c
+    for n in names:
+        for c in df.columns:
+            if n.lower() in str(c).strip().lower():
+                return c
+    return None
+
+
+def point_base(measurement, row, index, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col):
+    jid = jobid(row.get(jobid_col, "")) or f"ROW_{index}"
 
     return (
         Point(measurement)
         .tag("JOBID", jid)
-        .field("GROUPNAME", clean(row["GROUPNAME"]))
-        .field("USED_NAME", clean(row["USED_NAME"]))
-        .field("Teleport", clean(row["Teleport"]).upper())
-        .field("รายละเอียด", clean(row["รายละเอียด"]))
-        .field("METER_PROBLEM", clean(row["METER_PROBLEM"]))
-        .field("จำนวนวัน", float(row["จำนวนวัน"]))
+        .field("GROUPNAME", clean(row.get(group_col, "")))
+        .field("USED_NAME", clean(row.get(used_col, "")))
+        .field("Teleport", clean(row.get(teleport_col, "")).upper())
+        .field("รายละเอียด", clean(row.get(detail_col, "")))
+        .field("METER_PROBLEM", clean(row.get(problem_col, "")))
+        .field("จำนวนวัน", float(row.get(duration_col, 0)))
     )
 
 
@@ -80,81 +92,49 @@ except Exception as e:
 
 df.columns = [str(c).strip() for c in df.columns]
 
-required = [
-    "JOBID",
-    "GROUPNAME",
-    "USED_NAME",
-    "Teleport",
-    "รายละเอียด",
-    "วันที่แจ้ง",
-    "METER_PROBLEM",
-    "จำนวนวัน"
-]
+problem_col = col(df, "METER_PROBLEM", "Problem", "PROBLEM")
+jobid_col = col(df, "JOBID", "JOB ID", "JobID")
+group_col = col(df, "GROUPNAME", "GROUP NAME")
+date_col = col(df, "วันที่แจ้ง", "DATE")
+duration_col = col(df, "จำนวนวัน", "ระยะเวลางาน", "DURATION")
+used_col = col(df, "USED_NAME")
+status_col = col(df, "เช็คสถานะ", "สถานะ")
+teleport_col = col(df, "Teleport")
+detail_col = col(df, "รายละเอียด")
 
-missing = [c for c in required if c not in df.columns]
+required = [jobid_col, group_col, used_col, teleport_col, detail_col, date_col, problem_col, duration_col]
 
-if missing:
-    print("❌ Excel ขาด Column:", missing)
+if any(c is None for c in required):
+    print("❌ Excel ขาด Column สำคัญบางตัว")
     raise SystemExit
 
 
 # =========================
-# CLEAN DATA
+# CLEAN DATA & FILTER (Match LINE 4 Jobs)
 # =========================
 
-for c in [
-    "JOBID",
-    "GROUPNAME",
-    "USED_NAME",
-    "Teleport",
-    "รายละเอียด",
-    "METER_PROBLEM"
-]:
-    df[c] = df[c].apply(clean)
+w = df.copy()
 
-df["JOBID"] = df["JOBID"].apply(jobid)
+w["_AREA_"] = w[teleport_col].fillna("").astype(str).str.strip().str.upper()
+w["_PROBLEM_"] = w[problem_col].fillna("").astype(str).str.strip()
+w["_DURATION_"] = pd.to_numeric(w[duration_col], errors="coerce").fillna(0)
 
-df["Teleport"] = (
-    df["Teleport"]
-    .str.upper()
-    .str.strip()
-)
-
-df["วันที่แจ้ง"] = pd.to_datetime(
-    df["วันที่แจ้ง"],
-    dayfirst=True,
-    errors="coerce"
-)
-
-df = df.dropna(
-    subset=["วันที่แจ้ง"]
-).copy()
-
-df["จำนวนวัน"] = pd.to_numeric(
-    df["จำนวนวัน"],
-    errors="coerce"
-).fillna(0)
-
-
-# =========================
-# FILTER
-# =========================
-
-alert_df = df[
-    (df["Teleport"] == "BKK") &
-    (df["METER_PROBLEM"] != "") &
-    (df["จำนวนวัน"].between(0, 7))
+# เงื่อนไขตรงกับ LINE ทุกประการ (ได้ 4 งาน)
+alert_df = w[
+    (w["_AREA_"] == "BKK") &
+    (w["_PROBLEM_"] != "") &
+    (w["_DURATION_"].between(0, 7))
 ].copy()
 
-overdue_df = df[
-    (df["Teleport"] == "BKK") &
-    (df["จำนวนวัน"] >= 7)
+overdue_df = w[
+    (w["_AREA_"] == "BKK") &
+    (w["_DURATION_"] >= 7)
 ].copy()
 
 
 print()
 print("จำนวนข้อมูลทั้งหมด:", len(df))
-print("BKK + Problem 0-7:", len(alert_df))
+print("BKK + Problem 0-7 (ตรงกับ LINE):", len(alert_df))
 print("BKK >= 7 วัน:", len(overdue_df))
 
 
@@ -189,7 +169,7 @@ work_err = 0
 points_workorder = []
 for i, row in df.iterrows():
     try:
-        points_workorder.append(point_base("amr_workorder", row, i))
+        points_workorder.append(point_base("amr_workorder", row, i, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col))
     except Exception as e:
         work_err += 1
 
@@ -212,7 +192,7 @@ alert_err = 0
 points_alert = []
 for i, row in alert_df.iterrows():
     try:
-        p = point_base("amr_alert", row, i).field("alert", 1)
+        p = point_base("amr_alert", row, i, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col).field("alert", 1)
         points_alert.append(p)
     except Exception as e:
         alert_err += 1
