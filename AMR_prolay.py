@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+from datetime import datetime, timezone
 
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -11,7 +12,6 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 EXCEL = r"C:\project\received_files\data.xlsx"
 
-# ดึงค่าจาก Environment Variables บน Cloud หรือใส่ค่าตรงๆ สำหรับรันในเครื่อง
 INFLUX_URL = os.environ.get("INFLUX_URL", "https://us-east-1-1.aws.cloud2.influxdata.com")
 INFLUX_TOKEN = os.environ.get("INFLUX_TOKEN", "N2ZY7UCs1hz2yDg5TCvEf9oap4thA9fmIjGbA6aEogkpkEnlP4rCVKqm6WRSWfDvWqOT681vh0MCF89DYRD4yQ==")
 INFLUX_ORG = os.environ.get("INFLUX_ORG", "AMR-Monitoring")
@@ -36,9 +36,6 @@ def jobid(v):
 def point_base(measurement, row, index):
     jid = jobid(row["JOBID"]) or f"ROW_{index}"
 
-    # ทำให้งานที่วันที่เหมือนกันไม่ทับกัน
-    t = row["วันที่แจ้ง"] + pd.to_timedelta(index, unit="ns")
-
     return (
         Point(measurement)
         .tag("JOBID", jid)
@@ -48,7 +45,7 @@ def point_base(measurement, row, index):
         .field("รายละเอียด", clean(row["รายละเอียด"]))
         .field("METER_PROBLEM", clean(row["METER_PROBLEM"]))
         .field("จำนวนวัน", float(row["จำนวนวัน"]))
-        .time(t, WritePrecision.NS)
+        .time(datetime.now(timezone.utc), WritePrecision.NS)
     )
 
 
@@ -184,29 +181,6 @@ except Exception as e:
 
 
 # =========================
-# DELETE OLD DATA
-# =========================
-
-for measurement in [
-    "amr_workorder",
-    "amr_alert",
-    "amr_overdue_bkk"
-]:
-    try:
-        client.delete_api().delete(
-            start="1970-01-01T00:00:00Z",
-            stop="2100-01-01T00:00:00Z",
-            predicate=f'_measurement="{measurement}"',
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG
-        )
-        print("ลบ", measurement, "สำเร็จ")
-
-    except Exception as e:
-        print("⚠️ ลบ", measurement, "ไม่สำเร็จ:", e)
-
-
-# =========================
 # WORKORDER
 # =========================
 
@@ -273,6 +247,7 @@ try:
     p = (
         Point("amr_overdue_bkk")
         .field("count", int(len(overdue_df)))
+        .time(datetime.now(timezone.utc), WritePrecision.NS)
     )
 
     write.write(
@@ -302,7 +277,7 @@ client.close()
 
 print()
 print("==============================================")
-print("IMPORT COMPLETE (CLOUUD)")
+print("IMPORT COMPLETE (CLOUD)")
 print("==============================================")
 
 print("จำนวนข้อมูลทั้งหมด       :", len(df))
