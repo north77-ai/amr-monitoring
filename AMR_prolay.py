@@ -12,9 +12,8 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXCEL = os.path.join(BASE_DIR, "received_files", "data.xlsx")
 
-# ⚠️ ตั้งค่า InfluxDB Cloud ของคุณให้ถูกต้องเรียบร้อยแล้ว
 INFLUX_URL = "https://us-east-1-1.aws.cloud2.influxdata.com"
-INFLUX_TOKEN = "N2ZY7UCs1hz2yDg5TCvEf9oap4thA9fmIjGbA6aEogkpkEnlP4rCVKqm6WRSWfDvWqOT681vh0MCF89DYRD4yQ=="
+INFLUX_TOKEN = "AHRpHuPjeAOov_2Bz2LukBhTScKaEJzbVcUqAdjIg6kNNfViDCWjUVxsvSho-6HA9OycXDjGEg4KfLq0b11JLQ=="
 INFLUX_ORG = "AMR-Monitoring"
 INFLUX_BUCKET = "AMR_DATA"
 
@@ -37,9 +36,6 @@ def jobid(v):
 def point_base(measurement, row, index):
     jid = jobid(row["JOBID"]) or f"ROW_{index}"
 
-    # ทำให้งานที่วันที่เหมือนกันไม่ทับกัน
-    t = row["วันที่แจ้ง"] + pd.to_timedelta(index, unit="ns")
-
     return (
         Point(measurement)
         .tag("JOBID", jid)
@@ -49,7 +45,6 @@ def point_base(measurement, row, index):
         .field("รายละเอียด", clean(row["รายละเอียด"]))
         .field("METER_PROBLEM", clean(row["METER_PROBLEM"]))
         .field("จำนวนวัน", float(row["จำนวนวัน"]))
-        .time(t, WritePrecision.NS)
     )
 
 
@@ -164,7 +159,7 @@ print("BKK >= 7 วัน:", len(overdue_df))
 
 
 # =========================
-# INFLUXDB
+# INFLUXDB CONNECTION
 # =========================
 
 try:
@@ -185,82 +180,51 @@ except Exception as e:
 
 
 # =========================
-# DELETE OLD DATA
-# =========================
-
-for measurement in [
-    "amr_workorder",
-    "amr_alert",
-    "amr_overdue_bkk"
-]:
-    try:
-        client.delete_api().delete(
-            start="1970-01-01T00:00:00Z",
-            stop="2100-01-01T00:00:00Z",
-            predicate=f'_measurement="{measurement}"',
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG
-        )
-        print("ลบ", measurement, "สำเร็จ")
-
-    except Exception as e:
-        print("⚠️ ลบ", measurement, "ไม่สำเร็จ:", e)
-
-
-# =========================
-# WORKORDER
+# WORKORDER (Batch Write)
 # =========================
 
 work_ok = 0
 work_err = 0
 
+points_workorder = []
 for i, row in df.iterrows():
     try:
-        write.write(
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG,
-            record=point_base(
-                "amr_workorder",
-                row,
-                i
-            )
-        )
-        work_ok += 1
-
+        points_workorder.append(point_base("amr_workorder", row, i))
     except Exception as e:
         work_err += 1
-        print("workorder error:", e)
+
+try:
+    write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points_workorder)
+    work_ok = len(points_workorder)
+    print("✅ บันทึก amr_workorder สำเร็จ:", work_ok)
+except Exception as e:
+    work_err += len(points_workorder)
+    print("❌ workorder batch error:", e)
 
 
 # =========================
-# ALERT
+# ALERT (Batch Write)
 # =========================
 
 alert_ok = 0
 alert_err = 0
 
+points_alert = []
 for i, row in alert_df.iterrows():
     try:
-        p = point_base(
-            "amr_alert",
-            row,
-            i
-        ).field(
-            "alert",
-            1
-        )
-
-        write.write(
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG,
-            record=p
-        )
-
-        alert_ok += 1
-
+        p = point_base("amr_alert", row, i).field("alert", 1)
+        points_alert.append(p)
     except Exception as e:
         alert_err += 1
-        print("alert error:", e)
+
+if points_alert:
+    try:
+        write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points_alert)
+        alert_ok = len(points_alert)
+        print("✅ บันทึก amr_alert สำเร็จ:", alert_ok)
+    except Exception as e:
+        alert_err += len(points_alert)
+        print("❌ alert batch error:", e)
 
 
 # =========================
@@ -283,10 +247,11 @@ try:
     )
 
     overdue_ok = 1
+    print("✅ บันทึก amr_overdue_bkk สำเร็จ")
 
 except Exception as e:
     overdue_err = 1
-    print("overdue error:", e)
+    print("❌ overdue error:", e)
 
 
 # =========================
