@@ -15,7 +15,7 @@ EXCEL = os.path.join(BASE_DIR, "received_files", "data.xlsx")
 INFLUX_URL = "https://us-east-1-1.aws.cloud2.influxdata.com"
 INFLUX_TOKEN = "AHRpHuPjeAOov_2Bz2LukBhTScKaEJzbVcUqAdjIg6kNNfViDCWjUVxsvSho-6HA9OycXDjGEg4KfLq0b11JLQ=="
 INFLUX_ORG = "AMR-Monitoring"
-INFLUX_BUCKET = "AMR_DATA"
+INFLUX_BUCKET = "AMR_DATA_v2"
 
 
 # =========================
