@@ -5,41 +5,34 @@ from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 
-# ================= CONFIG (Environment Variables / Cloud Ready) =================
-# ดึงค่าจาก Environment Variables บน Render หรือใส่ค่าตรงๆ สำหรับรันในเครื่อง
-LINE_TOKEN = os.environ.get("LINE_TOKEN", "bnwZCoODv2oH4tOKKY9qngoA0Owf3piPTA/dOyZRX621w0FNeg3uPZaW6KjmcXj7Z2cVJarnnaINl24gdFy9hNVR6H3l9P09da/aUWG1IjNGUkHy2F2PhCVJJrfI+WBM5J76vDjbv8c6wpV4/voFgwdB04t89/1O/w1cDnyilFU=")
-ALERT_USER_ID = os.environ.get("ALERT_USER_ID", "Ca45282f34bacd5d00cb83b10d99ad08c")
+# ================= CONFIG =================
+LINE_TOKEN = "bnwZCoODv2oH4tOKKY9qngoA0Owf3piPTA/dOyZRX621w0FNeg3uPZaW6KjmcXj7Z2cVJarnnaINl24gdFy9hNVR6H3l9P09da/aUWG1IjNGUkHy2F2PhCVJJrfI+WBM5J76vDjbv8c6wpV4/voFgwdB04t89/1O/w1cDnyilFU="
+ALERT_USER_ID = "Ca45282f34bacd5d00cb83b10d99ad08c"
 
-# กำหนดตำแหน่งไฟล์ Excel และไฟล์ที่ใช้เก็บข้อมูล Alert ล่าสุด
-# บน Cloud แนะนำให้ใช้โฟลเดอร์ /tmp สำหรับไฟล์ชั่วคราว
-EXCEL_FILE = os.environ.get("EXCEL_FILE", r"C:\project\received_files\data.xlsx")
-LAST_ALERT_FILE = os.environ.get("LAST_ALERT_FILE", r"C:\project\last_alert.txt")
+# กำหนดตำแหน่งไฟล์ด้วย Relative Path รองรับ Linux บน Render
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+EXCEL_FILE = os.path.join(BASE_DIR, "received_files", "data.xlsx")
+LAST_ALERT_FILE = os.path.join(BASE_DIR, "last_alert.txt")
 
-# กำหนดไฟล์ Python ที่ใช้ส่งข้อมูลเข้า InfluxDB
-AMR_PROLAY_FILE = os.environ.get("AMR_PROLAY_FILE", r"C:\project\AMR_prolay.py")
-PYTHON_EXE = os.environ.get("PYTHON_EXE", "python")
+AMR_PROLAY_FILE = os.path.join(BASE_DIR, "AMR_prolay.py")
+PYTHON_EXE = "python3"
 
-# รับเฉพาะไฟล์ที่ชื่อขึ้นต้นด้วยคำนี้
 ALLOWED_FILE = "ตามงาน SLA AMR"
 
 
 # ================= TIME =================
 def get_check_time():
-    # อ่านเวลาปัจจุบันตามเขตเวลาไทย
     return datetime.now(
         ZoneInfo("Asia/Bangkok")
     ).strftime("%d/%m/%Y %H:%M:%S")
 
 
 def get_filename(filename=None):
-    # ใช้ชื่อไฟล์ที่รับจาก LINE
-    # ถ้าไม่มีชื่อ ให้ใช้ชื่อไฟล์ในเครื่องแทน
     return filename or os.path.basename(EXCEL_FILE)
 
 
 # ================= LINE =================
 def send_line(text):
-    # ส่งข้อความแจ้งเตือนไปยัง LINE
     try:
         r = requests.post(
             "https://api.line.me/v2/bot/message/push",
@@ -65,7 +58,6 @@ def send_line(text):
 
 
 def send_long(text):
-    # แบ่งข้อความยาวออกเป็นหลายข้อความ
     if len(text) <= 4500:
         return send_line(text)
 
@@ -88,13 +80,11 @@ def send_long(text):
 
 # ================= EXCEL =================
 def col(df, *names):
-    # ค้นหาชื่อคอลัมน์แบบตรงกันก่อน
     for n in names:
         for c in df.columns:
             if str(c).strip().lower() == n.lower():
                 return c
 
-    # จากนั้นค้นหาแบบมีคำที่ระบุอยู่ในชื่อ
     for n in names:
         for c in df.columns:
             if n.lower() in str(c).strip().lower():
@@ -104,7 +94,6 @@ def col(df, *names):
 
 
 def read_excel():
-    # ตรวจสอบว่ามีไฟล์ Excel อยู่หรือไม่
     if not os.path.exists(EXCEL_FILE):
         print("ไม่พบ:", EXCEL_FILE)
         return None
@@ -153,7 +142,6 @@ def get_jobs():
     print("duration:", duration)
     print("============================\n")
 
-    # ตรวจสอบว่าคอลัมน์สำคัญครบหรือไม่
     if not all([
         problem, jobid, customer, group, site,
         status, area, date, duration
@@ -175,7 +163,6 @@ def get_jobs():
         w[duration], errors="coerce"
     )
 
-    # เงื่อนไขเดิม: BKK + มี Problem + ระยะเวลา 0-7 วัน
     w = w[
         (w["_AREA_"] == "BKK") &
         (w["_PROBLEM_"] != "") &
@@ -330,7 +317,7 @@ def run_import():
     try:
         p = subprocess.Popen(
             [PYTHON_EXE, AMR_PROLAY_FILE],
-            cwd=os.path.dirname(AMR_PROLAY_FILE) if os.path.dirname(AMR_PROLAY_FILE) else None
+            cwd=os.path.dirname(AMR_PROLAY_FILE)
         )
         print("เริ่ม AMR_prolay.py PID:", p.pid)
 
@@ -408,7 +395,7 @@ def webhook():
                 continue
 
             os.makedirs(
-                os.path.dirname(EXCEL_FILE) if os.path.dirname(EXCEL_FILE) else ".",
+                os.path.dirname(EXCEL_FILE),
                 exist_ok=True
             )
 
@@ -518,9 +505,8 @@ def index():
 
 # ================= START =================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
     print("================================")
-    print("AMR MONITORING SYSTEM (CLOUD READY)")
+    print("AMR MONITORING SYSTEM")
     print("================================")
     print("Excel:", EXCEL_FILE)
     print("รับไฟล์ขึ้นต้นด้วย:", ALLOWED_FILE)
@@ -535,6 +521,6 @@ if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=port,
+        port=5000,
         debug=False
     )

@@ -1,6 +1,6 @@
 flask
-pandas
-influxdb-client
 requests
+pandas
 openpyxl
+influxdb-client
 gunicorn
