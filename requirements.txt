@@ -1,0 +1,5 @@
+flask
+pandas
+influxdb-client
+requests
+openpyxl
