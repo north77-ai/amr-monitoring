@@ -12,10 +12,10 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXCEL = os.path.join(BASE_DIR, "received_files", "data.xlsx")
 
-# ⚠️ หมายเหตุ: หากเก็บบน Render แนะนำให้ใช้ InfluxDB Cloud URL และ Token จริง
-INFLUX_URL = "https://your-influxdb-cloud-url"
-INFLUX_TOKEN = "C35rZpoQAlyjXsgVT9vLbDQMW2GlQ8LPK956yzfWbqwWpfil98oNk2OWfRvQ-Y6CuV_9Z4yW7ZiW1g-5DfLrKQ=="
-INFLUX_ORG = "AMR"
+# ⚠️ ตั้งค่า InfluxDB Cloud ของคุณให้ถูกต้องเรียบร้อยแล้ว
+INFLUX_URL = "https://us-east-1-1.aws.cloud2.influxdata.com"
+INFLUX_TOKEN = "N2ZY7UCs1hz2yDg5TCvEf9oap4thA9fmIjGbA6aEogkpkEnlP4rCVKqm6WRSWfDvWqOT681vh0MCF89DYRD4yQ=="
+INFLUX_ORG = "AMR-Monitoring"
 INFLUX_BUCKET = "AMR_DATA"
 
 
