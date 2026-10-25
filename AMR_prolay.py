@@ -1,20 +1,18 @@
 import os
 import pandas as pd
-from datetime import datetime, timezone
 
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 
 # =========================
-# CONFIG (InfluxDB Cloud)
+# CONFIG (Cloud & Environment Ready)
 # =========================
 
-EXCEL = r"C:\project\received_files\data.xlsx"
-
+EXCEL = os.environ.get("EXCEL_FILE", r"C:\project\received_files\data.xlsx")
 INFLUX_URL = os.environ.get("INFLUX_URL", "https://us-east-1-1.aws.cloud2.influxdata.com")
 INFLUX_TOKEN = os.environ.get("INFLUX_TOKEN", "N2ZY7UCs1hz2yDg5TCvEf9oap4thA9fmIjGbA6aEogkpkEnlP4rCVKqm6WRSWfDvWqOT681vh0MCF89DYRD4yQ==")
-INFLUX_ORG = os.environ.get("INFLUX_ORG", "AMR-Monitoring")
+INFLUX_ORG = os.environ.get("INFLUX_ORG", "AMR")
 INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "AMR_DATA")
 
 
@@ -100,7 +98,7 @@ print("BKK >= 7 วัน:", len(overdue_df))
 
 
 # =========================
-# INFLUXDB CLOUD (BATCH UPLOAD)
+# INFLUXDB CONNECTION (CLOUD)
 # =========================
 
 try:
@@ -110,71 +108,37 @@ try:
         org=INFLUX_ORG,
         timeout=300000
     )
-    write_api = client.write_api(write_options=SYNCHRONOUS)
-except Exception as x:
-    print("❌ เชื่อมต่อ InfluxDB Cloud ไม่สำเร็จ:", x)
+    write = client.write_api(write_options=SYNCHRONOUS)
+except Exception as e:
+    print("❌ เชื่อมต่อ InfluxDB ไม่สำเร็จ:", e)
     raise SystemExit
 
-now_time = datetime.now(timezone.utc)
-points = []
 
-# 1. เตรียมข้อมูล amr_workorder ทั้งหมด
-for i, row in df.iterrows():
-    jid = jobid(row["JOBID"]) or f"ROW_{i}"
-    p = (
-        Point("amr_workorder")
-        .tag("JOBID", jid)
-        .field("GROUPNAME", clean(row["GROUPNAME"]))
-        .field("USED_NAME", clean(row["USED_NAME"]))
-        .field("Teleport", clean(row["Teleport"]).upper())
-        .field("รายละเอียด", clean(row["รายละเอียด"]))
-        .field("METER_PROBLEM", clean(row["METER_PROBLEM"]))
-        .field("จำนวนวัน", float(row["จำนวนวัน"]))
-        .time(now_time, WritePrecision.NS)
-    )
-    points.append(p)
+# =========================
+# WRITE SUMMARY POINTS FOR GRAFANA
+# =========================
 
-# 2. เตรียมข้อมูล amr_alert
-for i, row in alert_df.iterrows():
-    jid = jobid(row["JOBID"]) or f"ROW_{i}"
-    p = (
-        Point("amr_alert")
-        .tag("JOBID", jid)
-        .field("GROUPNAME", clean(row["GROUPNAME"]))
-        .field("USED_NAME", clean(row["USED_NAME"]))
-        .field("Teleport", clean(row["Teleport"]).upper())
-        .field("รายละเอียด", clean(row["รายละเอียด"]))
-        .field("METER_PROBLEM", clean(row["METER_PROBLEM"]))
-        .field("จำนวนวัน", float(row["จำนวนวัน"]))
-        .field("alert", 1)
-        .time(now_time, WritePrecision.NS)
-    )
-    points.append(p)
-
-# 3. เตรียมข้อมูล amr_overdue_bkk
-p_overdue = (
-    Point("amr_overdue_bkk")
-    .field("count", int(len(overdue_df)))
-    .time(now_time, WritePrecision.NS)
-)
-points.append(p_overdue)
-
-# ส่งข้อมูลทั้งหมดทีเดียวรวดเดียวจบ (Batch Write)
 try:
-    print(" đang กำลังส่งข้อมูลทั้งหมดขึ้น InfluxDB Cloud...")
-    write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points)
-    print("✅ ส่งข้อมูลสำเร็จเรียบร้อยแล้ว!")
-except Exception as e:
-    print("❌ เกิดข้อผิดพลาดในการส่งข้อมูล:", e)
+    p_summary = (
+        Point("amr_summary_bkk")
+        .field("total_workorder", int(len(df[df["Teleport"] == "BKK"])))
+        .field("alert_count", int(len(alert_df)))
+        .field("overdue_count", int(len(overdue_df)))
+    )
+    
+    write.write(
+        bucket=INFLUX_BUCKET,
+        org=INFLUX_ORG,
+        record=p_summary
+    )
+    print("✅ บันทึกข้อมูลสรุป (amr_summary_bkk) บน Cloud สำเร็จ!")
 
-write_api.close()
+except Exception as e:
+    print("❌ บันทึกข้อมูลสรุปไม่สำเร็จ:", e)
+
+write.close()
 client.close()
 
-print()
 print("==============================================")
-print("IMPORT COMPLETE (CLOUD)")
-print("==============================================")
-print("จำนวนข้อมูลทั้งหมด       :", len(df))
-print("งาน BKK + Problem 0-7 วัน:", len(alert_df))
-print("งาน BKK 7 วันขึ้นไป      :", len(overdue_df))
+print("IMPORT COMPLETE & READY FOR GRAFANA")
 print("==============================================")
