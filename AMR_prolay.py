@@ -45,8 +45,13 @@ def col(df, *names):
     return None
 
 
-def point_base(measurement, row, index, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col):
+# ใช้ Timestamp เป็นเวลาปัจจุบัน/วันนี้ เพื่อให้ผ่าน Retention ของ InfluxDB และเขียนทับตัวเดิมได้สมบูรณ์
+FIXED_TIMESTAMP = pd.Timestamp.now(tz='UTC').normalize()
+
+
+def point_base(measurement, row, index, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col, date_col):
     jid = jobid(row.get(jobid_col, "")) or f"ROW_{index}"
+    actual_date_str = str(row.get(date_col, ""))
 
     return (
         Point(measurement)
@@ -57,6 +62,8 @@ def point_base(measurement, row, index, jobid_col, group_col, used_col, teleport
         .field("รายละเอียด", clean(row.get(detail_col, "")))
         .field("METER_PROBLEM", clean(row.get(problem_col, "")))
         .field("จำนวนวัน", float(row.get(duration_col, 0)))
+        .field("วันที่แจ้งจริง", actual_date_str)
+        .time(FIXED_TIMESTAMP, WritePrecision.NS)
     )
 
 
@@ -110,7 +117,7 @@ if any(c is None for c in required):
 
 
 # =========================
-# CLEAN DATA & FILTER (Match LINE 4 Jobs)
+# CLEAN DATA & FILTER
 # =========================
 
 w = df.copy()
@@ -119,7 +126,6 @@ w["_AREA_"] = w[teleport_col].fillna("").astype(str).str.strip().str.upper()
 w["_PROBLEM_"] = w[problem_col].fillna("").astype(str).str.strip()
 w["_DURATION_"] = pd.to_numeric(w[duration_col], errors="coerce").fillna(0)
 
-# เงื่อนไขตรงกับ LINE ทุกประการ (ได้ 4 งาน)
 alert_df = w[
     (w["_AREA_"] == "BKK") &
     (w["_PROBLEM_"] != "") &
@@ -133,7 +139,7 @@ overdue_df = w[
 
 
 print()
-print("จำนวนข้อมูลทั้งหมด:", len(df))
+print("จำนวนข้อมูลทั้งหมดใน Excel:", len(df))
 print("BKK + Problem 0-7 (ตรงกับ LINE):", len(alert_df))
 print("BKK >= 7 วัน:", len(overdue_df))
 
@@ -160,55 +166,56 @@ except Exception as e:
 
 
 # =========================
-# WORKORDER (Batch Write)
+# HELPER: BATCH WRITE WITH CHUNKS
 # =========================
 
-work_ok = 0
-work_err = 0
+def write_in_chunks(points, measurement_name, chunk_size=500):
+    success_count = 0
+    error_count = 0
+    for i in range(0, len(points), chunk_size):
+        chunk = points[i:i + chunk_size]
+        try:
+            write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=chunk)
+            success_count += len(chunk)
+        except Exception as e:
+            error_count += len(chunk)
+            print(f"❌ {measurement_name} chunk error at index {i}:", e)
+    return success_count, error_count
+
+
+# =========================
+# WORKORDER (Batch Write in Chunks)
+# =========================
 
 points_workorder = []
 for i, row in df.iterrows():
     try:
-        points_workorder.append(point_base("amr_workorder", row, i, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col))
+        points_workorder.append(point_base("amr_workorder", row, i, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col, date_col))
     except Exception as e:
-        work_err += 1
+        pass
 
-try:
-    write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points_workorder)
-    work_ok = len(points_workorder)
-    print("✅ บันทึก amr_workorder สำเร็จ:", work_ok)
-except Exception as e:
-    work_err += len(points_workorder)
-    print("❌ workorder batch error:", e)
+work_ok, work_err = write_in_chunks(points_workorder, "amr_workorder", chunk_size=500)
+print(f"✅ บันทึก amr_workorder สำเร็จ: {work_ok}")
 
 
 # =========================
-# ALERT (Batch Write)
+# ALERT (Batch Write in Chunks)
 # =========================
-
-alert_ok = 0
-alert_err = 0
 
 points_alert = []
 for i, row in alert_df.iterrows():
     try:
-        p = point_base("amr_alert", row, i, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col).field("alert", 1)
+        p = point_base("amr_alert", row, i, jobid_col, group_col, used_col, teleport_col, detail_col, problem_col, duration_col, date_col).field("alert", 1)
         points_alert.append(p)
     except Exception as e:
-        alert_err += 1
+        pass
 
-if points_alert:
-    try:
-        write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points_alert)
-        alert_ok = len(points_alert)
-        print("✅ บันทึก amr_alert สำเร็จ:", alert_ok)
-    except Exception as e:
-        alert_err += len(points_alert)
-        print("❌ alert batch error:", e)
+alert_ok, alert_err = write_in_chunks(points_alert, "amr_alert", chunk_size=500)
+print(f"✅ บันทึก amr_alert สำเร็จ: {alert_ok}")
 
 
 # =========================
-# OVERDUE
+# OVERDUE (ระบุ Timestamp ให้เขียนทับค่าเดิม ไม่สะสม)
 # =========================
 
 overdue_ok = 0
@@ -218,6 +225,7 @@ try:
     p = (
         Point("amr_overdue_bkk")
         .field("count", int(len(overdue_df)))
+        .time(FIXED_TIMESTAMP, WritePrecision.NS)
     )
 
     write.write(
@@ -251,7 +259,7 @@ print("==============================================")
 print("IMPORT COMPLETE")
 print("==============================================")
 
-print("จำนวนข้อมูลทั้งหมด       :", len(df))
+print("จำนวนข้อมูลทั้งหมดใน Excel :", len(df))
 print("amr_workorder            :", work_ok)
 print("amr_alert                :", alert_ok)
 print("amr_overdue_bkk          :", len(overdue_df))
