@@ -163,13 +163,20 @@ def get_jobs():
         w[duration], errors="coerce"
     )
 
+    # กรองเงื่อนไขหลัก (พื้นที่ BKK, มีปัญหา, ระยะเวลา 0-7 วัน)
     w = w[
         (w["_AREA_"] == "BKK") &
         (w["_PROBLEM_"] != "") &
         (w["_DURATION_"].between(0, 7))
     ]
 
-    print("BKK + Problem 0-7 วัน:", len(w))
+    # ตัดงานที่มีสถานะปิดแล้วออก (สามารถเพิ่มคำอื่นๆ ในลิสต์ได้ตามที่ Excel ใช้ เช่น "ปิด", "closed")
+    if status:
+        closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
+        for kw in closed_keywords:
+            w = w[~w[status].astype(str).str.lower().str.contains(kw, na=False)]
+
+    print("BKK + Problem 0-7 วัน (หลังกรองสถานะ):", len(w))
 
     jobs = []
 
