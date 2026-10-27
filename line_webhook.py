@@ -130,18 +130,6 @@ def get_jobs():
     status = col(df, "เช็คสถานะ", "สถานะ")
     area = col(df, "Teleport")
 
-    print("\n========== COLUMN ==========")
-    print("problem :", problem)
-    print("jobid   :", jobid)
-    print("customer:", customer)
-    print("group   :", group)
-    print("site    :", site)
-    print("status  :", status)
-    print("area    :", area)
-    print("date    :", date)
-    print("duration:", duration)
-    print("============================\n")
-
     if not all([
         problem, jobid, customer, group, site,
         status, area, date, duration
@@ -161,22 +149,23 @@ def get_jobs():
 
     w["_DURATION_"] = pd.to_numeric(
         w[duration], errors="coerce"
-    )
+    ).fillna(0)
 
-    # กรองเงื่อนไขหลัก (พื้นที่ BKK, มีปัญหา, ระยะเวลา 0-7 วัน)
+    # กรองเงื่อนไขหลัก (พื้นที่ BKK, มีปัญหา, ระยะเวลา 0 ถึง 7 วัน)
     w = w[
         (w["_AREA_"] == "BKK") &
         (w["_PROBLEM_"] != "") &
-        (w["_DURATION_"].between(0, 7))
+        (w["_DURATION_"] >= 0) &
+        (w["_DURATION_"] <= 7)
     ]
 
-    # ตัดงานที่มีสถานะปิดแล้วออก (สามารถเพิ่มคำอื่นๆ ในลิสต์ได้ตามที่ Excel ใช้ เช่น "ปิด", "closed")
+    # กรองงานที่ปิดแล้วออก
     if status:
         closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
         for kw in closed_keywords:
             w = w[~w[status].astype(str).str.lower().str.contains(kw, na=False)]
 
-    print("BKK + Problem 0-7 วัน (หลังกรองสถานะ):", len(w))
+    print("BKK + Problem 0-7 วัน (หลังกรอง):", len(w))
 
     jobs = []
 
@@ -279,12 +268,6 @@ def send_no_jobs_confirmation(filename=None, check_time=None):
     )
 
     ok = send_line(message)
-
-    if ok:
-        print("✅ ส่งข้อความยืนยัน 0 งานสำเร็จ")
-    else:
-        print("❌ ส่งข้อความยืนยัน 0 งานไม่สำเร็จ")
-
     return ok
 
 
@@ -327,7 +310,6 @@ def run_import():
             cwd=os.path.dirname(AMR_PROLAY_FILE)
         )
         print("เริ่ม AMR_prolay.py PID:", p.pid)
-
     except Exception as e:
         print("เรียก AMR_prolay.py ไม่สำเร็จ:", e)
 
@@ -344,12 +326,7 @@ def process_excel(filename=None):
             filename,
             check_time
         )
-
-        if send_long(message):
-            print("✅ ส่ง LINE Alert สำเร็จ")
-        else:
-            print("❌ ส่ง LINE Alert ไม่สำเร็จ")
-
+        send_long(message)
     else:
         send_no_jobs_confirmation(
             filename,
@@ -368,7 +345,6 @@ def webhook():
     data = request.get_json(silent=True) or {}
 
     for event in data.get("events", []):
-
         msg = event.get("message", {})
 
         if msg.get("type") != "file":
@@ -396,8 +372,6 @@ def webhook():
                 timeout=60
             )
 
-            print("Download status:", r.status_code)
-
             if r.status_code != 200:
                 continue
 
@@ -406,10 +380,19 @@ def webhook():
                 exist_ok=True
             )
 
+            # ลบไฟล์ Excel เก่าทิ้งก่อนเซฟไฟล์ใหม่เสมอ ป้องกันข้อมูลค้าง
+            if os.path.exists(EXCEL_FILE):
+                try:
+                    os.remove(EXCEL_FILE)
+                    print("🗑️ ลบไฟล์ Excel เก่าเรียบร้อยแล้ว")
+                except Exception as del_err:
+                    print("⚠️ ลบไฟล์เก่าไม่สำเร็จ:", del_err)
+
+            # บันทึกไฟล์ Excel ใหม่ลงไป
             with open(EXCEL_FILE, "wb") as f:
                 f.write(r.content)
 
-            print("บันทึก Excel:", EXCEL_FILE)
+            print("บันทึก Excel ใหม่:", EXCEL_FILE)
 
             process_excel(filename)
 
@@ -419,113 +402,17 @@ def webhook():
     return jsonify(status="ok"), 200
 
 
-# ================= GRAFANA =================
-@app.route("/grafana-alert", methods=["POST"])
-def grafana_alert():
-    data = request.get_json(silent=True) or {}
-    status = str(data.get("status", "")).lower()
-
-    print("Grafana status:", status)
-
-    if status not in ("firing", "alerting"):
-        return jsonify(status="ignored"), 200
-
-    jobs = get_jobs()
-    filename = os.path.basename(EXCEL_FILE)
-    check_time = get_check_time()
-
-    if not jobs:
-        ok = send_no_jobs_confirmation(
-            filename,
-            check_time
-        )
-
-        return jsonify(
-            status="no_jobs",
-            confirmation_sent=ok
-        ), 200
-
-    sig = signature(jobs)
-
-    if duplicate(sig):
-        return jsonify(status="duplicate"), 200
-
-    ok = send_long(
-        build_message(
-            jobs,
-            filename,
-            check_time
-        )
-    )
-
-    if ok:
-        save_sig(sig)
-
-    return jsonify(
-        status="sent" if ok else "failed",
-        jobs=len(jobs)
-    ), 200
-
-
-# ================= TEST =================
-@app.route("/test-send")
-def test_send():
-    filename = os.path.basename(EXCEL_FILE)
-    check_time = get_check_time()
-    jobs = get_jobs()
-
-    if not jobs:
-        ok = send_no_jobs_confirmation(
-            filename,
-            check_time
-        )
-
-        return jsonify(
-            status="no_jobs",
-            confirmation_sent=ok
-        ), 200
-
-    ok = send_long(
-        build_message(
-            jobs,
-            filename,
-            check_time
-        )
-    )
-
-    return jsonify(
-        status="sent" if ok else "failed",
-        jobs=len(jobs)
-    ), 200
-
-
 @app.route("/")
 def index():
     return jsonify({
         "status": "running",
         "excel": EXCEL_FILE,
-        "alert_to": "ALERT_USER_ID",
-        "auto_influx": AMR_PROLAY_FILE,
         "allowed_file": ALLOWED_FILE
     })
 
 
 # ================= START =================
 if __name__ == "__main__":
-    print("================================")
-    print("AMR MONITORING SYSTEM")
-    print("================================")
-    print("Excel:", EXCEL_FILE)
-    print("รับไฟล์ขึ้นต้นด้วย:", ALLOWED_FILE)
-    print("Alert → ALERT_USER_ID")
-    print("พื้นที่: BKK")
-    print("Problem: METER_PROBLEM")
-    print("Site → USED_NAME")
-    print("สถานะ → เช็คสถานะ")
-    print("จำนวนวัน: 0-7")
-    print("ส่งซ้ำเมื่อรับไฟล์ใหม่: เปิดใช้งาน")
-    print("================================")
-
     app.run(
         host="0.0.0.0",
         port=5000,
