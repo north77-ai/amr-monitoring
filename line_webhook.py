@@ -129,43 +129,32 @@ def get_jobs():
     site = col(df, "USED_NAME")
     status = col(df, "เช็คสถานะ", "สถานะ")
     area = col(df, "Teleport")
+    
+    # เพิ่มคอลัมน์ "วันนี้" สำหรับการตามงาน
+    today_col = col(df, "วันนี้")
 
-    if not all([
-        problem, jobid, customer, group, site,
-        status, area, date, duration
-    ]):
-        print("Column สำคัญไม่ครบ")
+    if not all([jobid, site, area, today_col]):
+        print("Column สำคัญไม่ครบ (ต้องการอย่างน้อย: JOBID, USED_NAME, Teleport, วันนี้)")
         return []
 
     w = df.copy()
 
-    w["_AREA_"] = (
-        w[area].fillna("").astype(str).str.strip().str.upper()
-    )
+    w["_AREA_"] = w[area].fillna("").astype(str).str.strip().str.upper()
+    w["_TODAY_"] = w[today_col].fillna("").astype(str).str.strip()
 
-    w["_PROBLEM_"] = (
-        w[problem].fillna("").astype(str).str.strip()
-    )
-
-    w["_DURATION_"] = pd.to_numeric(
-        w[duration], errors="coerce"
-    ).fillna(0)
-
-    # กรองเงื่อนไขหลัก (พื้นที่ BKK, มีปัญหา, ระยะเวลา 0 ถึง 7 วัน)
+    # กรองเฉพาะ BKK และ งานที่มีคำว่า "ตามวันนี้"
     w = w[
         (w["_AREA_"] == "BKK") &
-        (w["_PROBLEM_"] != "") &
-        (w["_DURATION_"] >= 0) &
-        (w["_DURATION_"] <= 7)
+        (w["_TODAY_"] == "ตามวันนี้")
     ]
 
-    # กรองงานที่ปิดแล้วออก
+    # กรองงานที่ปิดแล้วออก (กันเหนียว)
     if status:
         closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
         for kw in closed_keywords:
             w = w[~w[status].astype(str).str.lower().str.contains(kw, na=False)]
 
-    print("BKK + Problem 0-7 วัน (หลังกรอง):", len(w))
+    print("BKK + ตามวันนี้ (หลังกรอง):", len(w))
 
     jobs = []
 
@@ -190,20 +179,23 @@ def get_jobs():
         date_text = val(date)
 
         try:
-            d = pd.to_datetime(
-                r[date], errors="coerce", dayfirst=True
-            )
-
-            if not pd.isna(d):
-                date_text = d.strftime("%d/%m/%Y")
+            if date and not pd.isna(r[date]):
+                d = pd.to_datetime(
+                    r[date], errors="coerce", dayfirst=True
+                )
+                if not pd.isna(d):
+                    date_text = d.strftime("%d/%m/%Y")
         except:
             pass
 
         try:
-            d = float(r["_DURATION_"])
-            duration_text = (
-                str(int(d)) if d.is_integer() else str(d)
-            )
+            if duration:
+                d = float(r.get(duration, 0))
+                duration_text = (
+                    str(int(d)) if d.is_integer() else str(d)
+                )
+            else:
+                duration_text = "-"
         except:
             duration_text = "-"
 
@@ -229,7 +221,7 @@ def build_message(jobs, filename=None, check_time=None):
     check_time = check_time or get_check_time()
 
     text = (
-        "🚨 แจ้งเตือนงาน AMR\n"
+        "🚨 แจ้งเตือนงาน AMR (ตามวันนี้)\n"
         f"📁 ชื่อไฟล์: {filename}\n"
         f"🕒 เวลาตรวจสอบ: {check_time}\n"
         "พื้นที่: BKK\n"
@@ -380,7 +372,7 @@ def webhook():
                 exist_ok=True
             )
 
-            # ลบไฟล์ Excel เก่าทิ้งก่อนเซฟไฟล์ใหม่เสมอ ป้องกันข้อมูลค้าง
+            # ลบไฟล์เก่าออกก่อน
             if os.path.exists(EXCEL_FILE):
                 try:
                     os.remove(EXCEL_FILE)
@@ -388,7 +380,6 @@ def webhook():
                 except Exception as del_err:
                     print("⚠️ ลบไฟล์เก่าไม่สำเร็จ:", del_err)
 
-            # บันทึกไฟล์ Excel ใหม่ลงไป
             with open(EXCEL_FILE, "wb") as f:
                 f.write(r.content)
 
@@ -400,6 +391,20 @@ def webhook():
             print("ERROR รับไฟล์:", e)
 
     return jsonify(status="ok"), 200
+
+
+@app.route("/test-send")
+def test_send():
+    filename = os.path.basename(EXCEL_FILE)
+    check_time = get_check_time()
+    jobs = get_jobs()
+
+    if not jobs:
+        send_no_jobs_confirmation(filename, check_time)
+        return jsonify(status="no_jobs"), 200
+
+    send_long(build_message(jobs, filename, check_time))
+    return jsonify(status="sent", jobs=len(jobs)), 200
 
 
 @app.route("/")
