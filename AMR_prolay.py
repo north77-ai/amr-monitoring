@@ -70,7 +70,7 @@ if any(c is None for c in required):
 df["_JOBID_"] = df[jobid_col].apply(jobid)
 df["_GROUPNAME_"] = df[group_col].apply(clean)
 df["_USED_NAME_"] = df[used_col].apply(clean)
-df["_TELEPORT_"] = df[teleport_col].fillna("").astype(str).str.upper().str.strip()
+df["_TELEPORT_"] = df[teleport_col].fillna("ไม่ระบุ").astype(str).str.upper().str.strip()
 df["_DETAIL_"] = df[detail_col].apply(clean)
 df["_PROBLEM_"] = df[problem_col].fillna("").astype(str).str.strip()
 df["_DURATION_"] = pd.to_numeric(df[duration_col], errors="coerce").fillna(0)
@@ -168,8 +168,9 @@ alert_ok, alert_err = write_in_chunks(points_alert, "amr_alert", chunk_size=300)
 
 # 3. WRITE OVERDUE
 overdue_ok = 0
+now_ts = pd.Timestamp.now(tz='UTC').normalize()
 try:
-    p = Point("amr_overdue_bkk").field("count", int(len(overdue_df))).time(pd.Timestamp.now(tz='UTC').normalize(), WritePrecision.NS)
+    p = Point("amr_overdue_bkk").field("count", int(len(overdue_df))).time(now_ts, WritePrecision.NS)
     write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
     overdue_ok = 1
 except Exception as limit_err:
@@ -178,10 +179,10 @@ except Exception as limit_err:
         write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
         overdue_ok = 1
 
-# 4. WRITE TOTAL JOBS (ส่งยอด 4657 เข้าไปตรงๆ)
+# 4. WRITE TOTAL JOBS (ส่งยอด 4648 เข้าไปตรงๆ)
 total_ok = 0
 try:
-    p_total = Point("amr_total_jobs").field("count", int(len(df))).time(pd.Timestamp.now(tz='UTC').normalize(), WritePrecision.NS)
+    p_total = Point("amr_total_jobs").field("count", int(len(df))).time(now_ts, WritePrecision.NS)
     write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_total)
     total_ok = 1
 except Exception as limit_err:
@@ -189,6 +190,34 @@ except Exception as limit_err:
         time.sleep(15)
         write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_total)
         total_ok = 1
+
+# 5. WRITE AREA SUMMARY 
+area_counts = df["_TELEPORT_"].value_counts()
+for area_name, count_val in area_counts.items():
+    if area_name:
+        p_area = Point("amr_area_summary").tag("Teleport", str(area_name)).field("count", int(count_val)).time(now_ts, WritePrecision.NS)
+        try:
+            write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_area)
+        except Exception as e:
+            if "429" in str(e):
+                time.sleep(15)
+                write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_area)
+
+# 6. WRITE AGE SUMMARY (สรุปอายุงานส่งตรง ไม่โดนบล็อก)
+age_groups = {
+    "0-1 วัน": len(df[df["_DURATION_"] <= 1]),
+    "2-3 วัน": len(df[(df["_DURATION_"] > 1) & (df["_DURATION_"] <= 3)]),
+    "4-6 วัน": len(df[(df["_DURATION_"] > 3) & (df["_DURATION_"] <= 6)]),
+    "7+ วัน": len(df[df["_DURATION_"] > 6])
+}
+for age_name, count_val in age_groups.items():
+    p_age = Point("amr_age_summary").tag("age_group", age_name).field("count", int(count_val)).time(now_ts, WritePrecision.NS)
+    try:
+        write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_age)
+    except Exception as e:
+        if "429" in str(e):
+            time.sleep(15)
+            write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_age)
 
 write.close()
 client.close()
