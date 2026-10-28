@@ -62,10 +62,10 @@ today_col = col(df, "วันนี้")
 
 required = [jobid_col, group_col, used_col, teleport_col, detail_col, date_col, problem_col, duration_col, today_col]
 if any(c is None for c in required):
-    raise SystemExit("❌ Excel ขาด Column สำคัญ (ตรวจสอบคอลัมน์ วันนี้, จำนวนวัน, สถานะ)")
+    raise SystemExit("❌ Excel ขาด Column สำคัญ")
 
 # =========================
-# CLEAN DATA ล่วงหน้า (ป้องกัน Error ล่องหน)
+# CLEAN DATA ล่วงหน้า
 # =========================
 df["_JOBID_"] = df[jobid_col].apply(jobid)
 df["_GROUPNAME_"] = df[group_col].apply(clean)
@@ -73,7 +73,6 @@ df["_USED_NAME_"] = df[used_col].apply(clean)
 df["_TELEPORT_"] = df[teleport_col].fillna("").astype(str).str.upper().str.strip()
 df["_DETAIL_"] = df[detail_col].apply(clean)
 df["_PROBLEM_"] = df[problem_col].fillna("").astype(str).str.strip()
-# บังคับแปลงคอลัมน์จำนวนวันเป็นตัวเลข ถ้าพังให้เป็น 0
 df["_DURATION_"] = pd.to_numeric(df[duration_col], errors="coerce").fillna(0)
 df["_TODAY_"] = df[today_col].fillna("").astype(str).str.strip()
 df["_DATE_"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
@@ -120,10 +119,6 @@ overdue_df = df[
     (df["_DURATION_"] >= 7)
 ].copy()
 
-print(f"\nจำนวนข้อมูลทั้งหมดใน Excel: {len(df)}")
-print(f"BKK + ตามวันนี้: {len(alert_df)}")
-print(f"BKK >= 7 วัน: {len(overdue_df)}")
-
 # =========================
 # INFLUXDB CONNECTION & BATCH WRITE
 # =========================
@@ -156,12 +151,11 @@ def write_in_chunks(points, measurement_name, chunk_size=500):
 # 1. WRITE WORKORDER
 points_workorder = []
 for i, row in df.iterrows():
-    try:
-        points_workorder.append(point_base("amr_workorder", row, i))
+    try: points_workorder.append(point_base("amr_workorder", row, i))
     except Exception as e: pass
 work_ok, work_err = write_in_chunks(points_workorder, "amr_workorder", chunk_size=300)
 
-# 2. WRITE ALERT (เขียนทับด้วย is_alert)
+# 2. WRITE ALERT
 points_alert = []
 bkk_df = df[df["_TELEPORT_"] == "BKK"]
 for i, row in bkk_df.iterrows():
@@ -184,8 +178,18 @@ except Exception as limit_err:
         write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
         overdue_ok = 1
 
+# 4. WRITE TOTAL JOBS (ส่งยอด 4657 เข้าไปตรงๆ)
+total_ok = 0
+try:
+    p_total = Point("amr_total_jobs").field("count", int(len(df))).time(pd.Timestamp.now(tz='UTC').normalize(), WritePrecision.NS)
+    write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_total)
+    total_ok = 1
+except Exception as limit_err:
+    if "429" in str(limit_err):
+        time.sleep(15)
+        write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_total)
+        total_ok = 1
+
 write.close()
 client.close()
-
-print(f"\namr_workorder: {work_ok} | amr_alert: {alert_ok} | amr_overdue_bkk: {len(overdue_df) if overdue_ok else 0}")
-print("✅ ส่งข้อมูลเข้า InfluxDB สำเร็จ!")
+print(f"✅ ส่งข้อมูลเข้า InfluxDB สำเร็จ!")
