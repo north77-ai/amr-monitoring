@@ -45,8 +45,14 @@ def send_line(text):
             },
             timeout=30
         )
+
+        print("LINE STATUS:", r.status_code)
+        print("LINE RESPONSE:", r.text)
+
         return r.status_code == 200
-    except Exception:
+
+    except Exception as e:
+        print("LINE ERROR:", e)
         return False
 
 
@@ -64,6 +70,7 @@ def send_long(text):
         else:
             current += sep if current else ""
             current += block
+
     if current:
         messages.append(current)
 
@@ -74,79 +81,122 @@ def send_long(text):
 def col(df, *names):
     for n in names:
         for c in df.columns:
-            if str(c).strip().lower() == n.lower(): return c
+            if str(c).strip().lower() == n.lower():
+                return c
+
     for n in names:
         for c in df.columns:
-            if n.lower() in str(c).strip().lower(): return c
+            if n.lower() in str(c).strip().lower():
+                return c
+
     return None
 
+
 def read_excel():
-    if not os.path.exists(EXCEL_FILE): return None
+    if not os.path.exists(EXCEL_FILE):
+        print("ไม่พบ:", EXCEL_FILE)
+        return None
+
     try:
         x = pd.ExcelFile(EXCEL_FILE)
         sheet = "1.Data" if "1.Data" in x.sheet_names else None
-        if not sheet: return None
+
+        if not sheet:
+            print("ไม่พบ Sheet 1.Data")
+            return None
+
         return pd.read_excel(EXCEL_FILE, sheet_name=sheet)
-    except Exception:
+
+    except Exception as e:
+        print("อ่าน Excel ไม่สำเร็จ:", e)
         return None
+
 
 # ================= GET JOBS =================
 def get_jobs():
     df = read_excel()
-    if df is None: return []
+
+    if df is None:
+        return []
 
     problem = col(df, "METER_PROBLEM", "Problem", "PROBLEM")
     jobid = col(df, "JOBID", "JOB ID", "JobID")
     customer = col(df, "PEA No.", "PEA No", "ผู้ใช้ไฟฟ้า/สถานที่")
     group = col(df, "GROUPNAME", "GROUP NAME")
     date = col(df, "วันที่แจ้ง", "DATE")
-    
-    # ดึงคอลัมน์ "วันที่เหลือก่อนถึงวันสุดท้าย" มาเป็น priority แรก
     duration = col(df, "วันที่เหลือก่อนถึงวันสุดท้าย", "จำนวนวัน", "ระยะเวลางาน", "DURATION")
-    
     site = col(df, "USED_NAME")
     status = col(df, "เช็คสถานะ", "สถานะ")
     area = col(df, "Teleport")
+    
+    # ใช้คอลัมน์สรุป SLA ตามหน้าตารางสรุป Excel (ตรงกับ 2 งาน)
     sla_summary_col = col(df, "1.สรุปติดตาม SLA1")
 
     if not all([jobid, site, area, sla_summary_col]):
-        print("Column สำคัญไม่ครบ")
+        print("Column สำคัญไม่ครบ (ต้องการอย่างน้อย: JOBID, USED_NAME, Teleport, 1.สรุปติดตาม SLA1)")
         return []
 
     w = df.copy()
+
     w["_AREA_"] = w[area].fillna("").astype(str).str.strip().str.upper()
     w["_SLA_SUMMARY_"] = w[sla_summary_col].fillna("").astype(str).str.strip()
 
-    w = w[(w["_AREA_"] == "BKK") & (w["_SLA_SUMMARY_"] == "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)")]
+    # กรองเฉพาะ BKK และตรงกับเงื่อนไขหน้าสรุป Excel "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)" (2 งาน)
+    w = w[
+        (w["_AREA_"] == "BKK") &
+        (w["_SLA_SUMMARY_"] == "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)")
+    ]
 
+    # กรองงานที่ปิดแล้วออก (กันเหนียว)
     if status:
         closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
         for kw in closed_keywords:
             w = w[~w[status].astype(str).str.lower().str.contains(kw, na=False)]
 
+    print("BKK + SLA Summary (หลังกรอง):", len(w))
+
     jobs = []
+
     for _, r in w.iterrows():
+
         def val(c):
-            if not c: return "-"
+            if not c:
+                return "-"
+
             x = r.get(c, "")
-            if pd.isna(x): return "-"
+
+            if pd.isna(x):
+                return "-"
+
             x = str(x).strip()
             return x if x else "-"
 
-        customer_text = val(customer).replace("สถานที่", "").strip()
+        customer_text = (
+            val(customer).replace("สถานที่", "").strip()
+        )
+
         date_text = val(date)
+
         try:
             if date and not pd.isna(r[date]):
-                d = pd.to_datetime(r[date], errors="coerce", dayfirst=True)
-                if not pd.isna(d): date_text = d.strftime("%d/%m/%Y")
-        except: pass
+                d = pd.to_datetime(
+                    r[date], errors="coerce", dayfirst=True
+                )
+                if not pd.isna(d):
+                    date_text = d.strftime("%d/%m/%Y")
+        except:
+            pass
 
         try:
             if duration:
                 d = float(r.get(duration, 0))
-                duration_text = str(int(d)) if d.is_integer() else str(d)
-            else: duration_text = "-"
-        except: duration_text = "-"
+                duration_text = (
+                    str(int(d)) if d.is_integer() else str(d)
+                )
+            else:
+                duration_text = "-"
+        except:
+            duration_text = "-"
 
         jobs.append({
             "site": val(site),
@@ -160,7 +210,9 @@ def get_jobs():
             "status": val(status),
             "duration": duration_text
         })
+
     return jobs
+
 
 # ================= MESSAGE =================
 def build_message(jobs, filename=None, check_time=None):
@@ -189,11 +241,15 @@ def build_message(jobs, filename=None, check_time=None):
             f"📊 สถานะ: {j['status']}\n"
             f"⏱️ ระยะเวลางาน: {j['duration']} วัน"
         )
+
     return text
 
+
+# ================= NO JOBS =================
 def send_no_jobs_confirmation(filename=None, check_time=None):
     filename = get_filename(filename)
     check_time = check_time or get_check_time()
+
     message = (
         "✅ ตรวจสอบงาน AMR เรียบร้อย\n"
         f"📁 ชื่อไฟล์: {filename}\n"
@@ -201,57 +257,167 @@ def send_no_jobs_confirmation(filename=None, check_time=None):
         "📍 พื้นที่: BKK\n"
         "พบงานที่ต้องตรวจสอบ 0 งาน"
     )
-    return send_line(message)
+
+    ok = send_line(message)
+    return ok
+
+
+# ================= DUPLICATE =================
+def signature(jobs):
+    return hashlib.md5(
+        json.dumps(
+            jobs,
+            ensure_ascii=False,
+            sort_keys=True
+        ).encode()
+    ).hexdigest()
+
+
+def duplicate(sig):
+    if not os.path.exists(LAST_ALERT_FILE):
+        return False
+
+    try:
+        with open(LAST_ALERT_FILE, encoding="utf-8") as f:
+            return f.read().strip() == sig
+    except:
+        return False
+
+
+def save_sig(sig):
+    with open(
+        LAST_ALERT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        f.write(sig)
+
 
 # ================= IMPORT =================
 def run_import():
     try:
-        p = subprocess.Popen([PYTHON_EXE, AMR_PROLAY_FILE], cwd=os.path.dirname(AMR_PROLAY_FILE))
-    except Exception: pass
+        p = subprocess.Popen(
+            [PYTHON_EXE, AMR_PROLAY_FILE],
+            cwd=os.path.dirname(AMR_PROLAY_FILE)
+        )
+        print("เริ่ม AMR_prolay.py PID:", p.pid)
+    except Exception as e:
+        print("เรียก AMR_prolay.py ไม่สำเร็จ:", e)
+
 
 def process_excel(filename=None):
     filename = get_filename(filename)
     check_time = get_check_time()
+
     jobs = get_jobs()
-    if jobs: send_long(build_message(jobs, filename, check_time))
-    else: send_no_jobs_confirmation(filename, check_time)
-    threading.Thread(target=run_import, daemon=True).start()
+
+    if jobs:
+        message = build_message(
+            jobs,
+            filename,
+            check_time
+        )
+        send_long(message)
+    else:
+        send_no_jobs_confirmation(
+            filename,
+            check_time
+        )
+
+    threading.Thread(
+        target=run_import,
+        daemon=True
+    ).start()
+
 
 # ================= WEBHOOK =================
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True) or {}
+
     for event in data.get("events", []):
         msg = event.get("message", {})
-        if msg.get("type") != "file": continue
+
+        if msg.get("type") != "file":
+            continue
 
         filename = msg.get("fileName", "")
         message_id = msg.get("id")
 
-        if not (filename.startswith(ALLOWED_FILE) and filename.lower().endswith((".xlsx", ".xls"))):
+        print("ได้รับไฟล์:", filename)
+
+        if not (
+            filename.startswith(ALLOWED_FILE)
+            and filename.lower().endswith((".xlsx", ".xls"))
+        ):
+            print("⏭️ ข้ามไฟล์:", filename)
             continue
 
         try:
             r = requests.get(
-                f"https://api-data.line.me/v2/bot/message/{message_id}/content",
-                headers={"Authorization": f"Bearer {LINE_TOKEN}"},
+                f"https://api-data.line.me/v2/bot/message/"
+                f"{message_id}/content",
+                headers={
+                    "Authorization": f"Bearer {LINE_TOKEN}"
+                },
                 timeout=60
             )
-            if r.status_code != 200: continue
 
-            os.makedirs(os.path.dirname(EXCEL_FILE), exist_ok=True)
+            if r.status_code != 200:
+                continue
+
+            os.makedirs(
+                os.path.dirname(EXCEL_FILE),
+                exist_ok=True
+            )
+
             if os.path.exists(EXCEL_FILE):
-                try: os.remove(EXCEL_FILE)
-                except: pass
+                try:
+                    os.remove(EXCEL_FILE)
+                    print("🗑️ ลบไฟล์ Excel เก่าเรียบร้อยแล้ว")
+                except Exception as del_err:
+                    print("⚠️ ลบไฟล์เก่าไม่สำเร็จ:", del_err)
 
-            with open(EXCEL_FILE, "wb") as f: f.write(r.content)
+            with open(EXCEL_FILE, "wb") as f:
+                f.write(r.content)
+
+            print("บันทึก Excel ใหม่:", EXCEL_FILE)
+
             process_excel(filename)
-        except Exception: pass
+
+        except Exception as e:
+            print("ERROR รับไฟล์:", e)
+
     return jsonify(status="ok"), 200
+
+
+@app.route("/test-send")
+def test_send():
+    filename = os.path.basename(EXCEL_FILE)
+    check_time = get_check_time()
+    jobs = get_jobs()
+
+    if not jobs:
+        send_no_jobs_confirmation(filename, check_time)
+        return jsonify(status="no_jobs"), 200
+
+    send_long(build_message(jobs, filename, check_time))
+    return jsonify(status="sent", jobs=len(jobs)), 200
+
 
 @app.route("/")
 def index():
-    return jsonify({"status": "running", "excel": EXCEL_FILE, "allowed_file": ALLOWED_FILE})
+    return jsonify({
+        "status": "running",
+        "excel": EXCEL_FILE,
+        "allowed_file": ALLOWED_FILE
+    })
 
+
+# ================= START =================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=False
+    )
