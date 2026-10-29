@@ -3,24 +3,25 @@ import requests, pandas as pd, os, hashlib, json, subprocess, threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-app = Flask(__name__)
+app = Flask(__name__) # สร้างเซิร์ฟเวอร์เว็บด้วย Flask สำหรับรอรับข้อมูลจาก LINE
 
 # ================= CONFIG =================
 LINE_TOKEN = "bnwZCoODv2oH4tOKKY9qngoA0Owf3piPTA/dOyZRX621w0FNeg3uPZaW6KjmcXj7Z2cVJarnnaINl24gdFy9hNVR6H3l9P09da/aUWG1IjNGUkHy2F2PhCVJJrfI+WBM5J76vDjbv8c6wpV4/voFgwdB04t89/1O/w1cDnyilFU="
 ALERT_USER_ID = "Ca45282f34bacd5d00cb83b10d99ad08c"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-EXCEL_FILE = os.path.join(BASE_DIR, "received_files", "data.xlsx")
+EXCEL_FILE = os.path.join(BASE_DIR, "received_files", "data.xlsx") # ที่ตั้งไฟล์ที่จะเซฟจาก LINE
 LAST_ALERT_FILE = os.path.join(BASE_DIR, "last_alert.txt")
 
-AMR_PROLAY_FILE = os.path.join(BASE_DIR, "AMR_prolay.py")
+AMR_PROLAY_FILE = os.path.join(BASE_DIR, "AMR_prolay.py") # ไฟล์สคริปต์ที่จะสั่งรันต่อ
 PYTHON_EXE = "python3"
 
-ALLOWED_FILE = "ตามงาน SLA AMR"
+ALLOWED_FILE = "ตามงาน SLA AMR" # ชื่อไฟล์ที่อนุญาตให้บอททำงานด้วย
 
 
 # ================= TIME =================
 def get_check_time():
+    # ดึงเวลาปัจจุบัน (โซนเวลาไทย)
     return datetime.now(
         ZoneInfo("Asia/Bangkok")
     ).strftime("%d/%m/%Y %H:%M:%S")
@@ -32,6 +33,7 @@ def get_filename(filename=None):
 
 # ================= LINE =================
 def send_line(text):
+    # ฟังก์ชันสำหรับส่งข้อความกลับไปที่ LINE
     try:
         r = requests.post(
             "https://api.line.me/v2/bot/message/push",
@@ -57,6 +59,7 @@ def send_line(text):
 
 
 def send_long(text):
+    # ถ้าข้อความยาวเกินไป ให้แบ่งส่งทีละท่อน (ลิมิตของ LINE)
     if len(text) <= 4500:
         return send_line(text)
 
@@ -79,6 +82,7 @@ def send_long(text):
 
 # ================= EXCEL =================
 def col(df, *names):
+    # ค้นหาคอลัมน์ใน Excel แบบยืดหยุ่น เผื่อชื่อเพี้ยนเล็กน้อย
     for n in names:
         for c in df.columns:
             if str(c).strip().lower() == n.lower():
@@ -93,6 +97,7 @@ def col(df, *names):
 
 
 def read_excel():
+    # เปิดอ่านไฟล์ Excel แผ่น 1.Data
     if not os.path.exists(EXCEL_FILE):
         print("ไม่พบ:", EXCEL_FILE)
         return None
@@ -114,6 +119,7 @@ def read_excel():
 
 # ================= GET JOBS =================
 def get_jobs():
+    # ดึงข้อมูลจากไฟล์ Excel แล้วเอามากรองเงื่อนไข
     df = read_excel()
 
     if df is None:
@@ -157,6 +163,7 @@ def get_jobs():
 
     jobs = []
 
+    # วนลูปอ่านข้อมูลทีละบรรทัดเพื่อเตรียมส่งข้อความ
     for _, r in w.iterrows():
 
         def val(c):
@@ -216,6 +223,7 @@ def get_jobs():
 
 # ================= MESSAGE =================
 def build_message(jobs, filename=None, check_time=None):
+    # สร้างข้อความสวยงามสำหรับส่งเข้า LINE
     filename = get_filename(filename)
     check_time = check_time or get_check_time()
 
@@ -247,6 +255,7 @@ def build_message(jobs, filename=None, check_time=None):
 
 # ================= NO JOBS =================
 def send_no_jobs_confirmation(filename=None, check_time=None):
+    # ส่งข้อความยืนยันกรณีที่ไม่มีงานต้องเตือน (0 งาน)
     filename = get_filename(filename)
     check_time = check_time or get_check_time()
 
@@ -295,6 +304,7 @@ def save_sig(sig):
 
 # ================= IMPORT =================
 def run_import():
+    # สั่งให้ไฟล์ AMR_prolay.py หรือไฟล์แปลงข้อมูลรันเบื้องหลังเพื่อเอาข้อมูลเข้า Grafana
     try:
         p = subprocess.Popen(
             [PYTHON_EXE, AMR_PROLAY_FILE],
@@ -306,6 +316,7 @@ def run_import():
 
 
 def process_excel(filename=None):
+    # แกนหลักของการตรวจสอบ ถ้างงาน > 0 ก็ส่งเตือน จากนั้นสั่งรันสคริปต์
     filename = get_filename(filename)
     check_time = get_check_time()
 
@@ -333,6 +344,7 @@ def process_excel(filename=None):
 # ================= WEBHOOK =================
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    # จุดรับข้อมูลตอนที่คุณส่งไฟล์ Excel เข้ามาในช่องแชท LINE
     data = request.get_json(silent=True) or {}
 
     for event in data.get("events", []):
@@ -354,6 +366,7 @@ def webhook():
             continue
 
         try:
+            # สั่งดาวน์โหลดไฟล์จาก LINE มาไว้ในเซิร์ฟเวอร์
             r = requests.get(
                 f"https://api-data.line.me/v2/bot/message/"
                 f"{message_id}/content",
@@ -373,13 +386,13 @@ def webhook():
 
             if os.path.exists(EXCEL_FILE):
                 try:
-                    os.remove(EXCEL_FILE)
+                    os.remove(EXCEL_FILE) # ลบไฟล์เดิมทิ้งก่อน
                     print("🗑️ ลบไฟล์ Excel เก่าเรียบร้อยแล้ว")
                 except Exception as del_err:
                     print("⚠️ ลบไฟล์เก่าไม่สำเร็จ:", del_err)
 
             with open(EXCEL_FILE, "wb") as f:
-                f.write(r.content)
+                f.write(r.content) # เซฟไฟล์ใหม่ทับลงไป
 
             print("บันทึก Excel ใหม่:", EXCEL_FILE)
 
@@ -416,6 +429,7 @@ def index():
 
 # ================= START =================
 if __name__ == "__main__":
+    # เปิดเซิร์ฟเวอร์ให้ทำงานตลอดเวลาที่พอร์ต 5000
     app.run(
         host="0.0.0.0",
         port=5000,

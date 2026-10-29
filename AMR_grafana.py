@@ -11,6 +11,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXCEL = os.path.join(BASE_DIR, "received_files", "data.xlsx")
 
+# ตั้งค่าฐานข้อมูล InfluxDB (เชื่อมต่อกับระบบคลาวด์)
 INFLUX_URL = "https://us-east-1-1.aws.cloud2.influxdata.com"
 INFLUX_TOKEN = "AHRpHuPjeAOov_2Bz2LukBhTScKaEJzbVcUqAdjIg6kNNfViDCWjUVxsvSho-6HA9OycXDjGEg4KfLq0b11JLQ=="
 INFLUX_ORG = "AMR-Monitoring"
@@ -40,6 +41,7 @@ if not os.path.exists(EXCEL):
     raise SystemExit("❌ ไม่พบไฟล์:", EXCEL)
 
 try:
+    # อ่านไฟล์ Excel แผ่น 1.Data
     excel = pd.ExcelFile(EXCEL)
     if "1.Data" not in excel.sheet_names:
         raise SystemExit("❌ ไม่พบ Sheet 1.Data")
@@ -49,6 +51,7 @@ except Exception as e:
 
 df.columns = [str(c).strip() for c in df.columns]
 
+# ล็อคชื่อคอลัมน์จาก Excel เข้ากับตัวแปรในโค้ด
 problem_col = col(df, "METER_PROBLEM", "Problem", "PROBLEM")
 jobid_col = col(df, "JOBID", "JOB ID", "JobID")
 group_col = col(df, "GROUPNAME", "GROUP NAME")
@@ -67,6 +70,7 @@ if any(c is None for c in required):
 # =========================
 # CLEAN DATA ล่วงหน้า
 # =========================
+# แปลงข้อมูลในแต่ละคอลัมน์ให้สะอาดพร้อมใช้
 df["_JOBID_"] = df[jobid_col].apply(jobid)
 df["_GROUPNAME_"] = df[group_col].apply(clean)
 df["_USED_NAME_"] = df[used_col].apply(clean)
@@ -80,6 +84,7 @@ df["_STATUS_"] = df[status_col].fillna("").astype(str).str.lower() if status_col
 
 # ----------------- แก้ไขจุดสำคัญตรงนี้ -----------------
 def point_base(measurement, row, index):
+    # ปั้นข้อมูลให้เป็น "จุด" (Point) เพื่อส่งเข้า Database กราฟาน่า
     jid = row["_JOBID_"] or f"ROW_{index}"
     
     # เปลี่ยนมาใช้เวลาปัจจุบันของระบบ เพื่อให้ Grafana ใช้คำสั่ง last() ดึงข้อมูลใหม่สุดได้เสมอ
@@ -91,7 +96,7 @@ def point_base(measurement, row, index):
     return (
         Point(measurement)
         .tag("JOBID", jid)
-        .tag("Teleport", row["_TELEPORT_"])
+        .tag("Teleport", row["_TELEPORT_"]) # ระบุ Teleport ให้เป็น Tag เพื่อให้ใช้คำสั่ง Group ได้
         .field("GROUPNAME", row["_GROUPNAME_"])
         .field("USED_NAME", row["_USED_NAME_"])
         .field("รายละเอียด", row["_DETAIL_"])
@@ -105,6 +110,7 @@ def point_base(measurement, row, index):
 # =========================
 # FILTER
 # =========================
+# คัดแยกกลุ่มข้อมูล เช่น พวกที่ค้าง งานที่มีปัญหา
 closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
 is_closed = df["_STATUS_"].str.contains('|'.join(closed_keywords), regex=True)
 
@@ -129,6 +135,7 @@ except Exception as e:
     raise SystemExit(f"❌ เชื่อมต่อ InfluxDB ไม่สำเร็จ: {e}")
 
 def write_in_chunks(points, measurement_name, chunk_size=500):
+    # ฟังก์ชันช่วยยิงข้อมูลเข้า Database เป็นก้อนๆ ป้องกันการค้างเวลาไฟล์ใหญ่ๆ
     success_count, error_count = 0, 0
     for i in range(0, len(points), chunk_size):
         chunk = points[i:i + chunk_size]
@@ -148,14 +155,14 @@ def write_in_chunks(points, measurement_name, chunk_size=500):
                     break
     return success_count, error_count
 
-# 1. WRITE WORKORDER
+# 1. WRITE WORKORDER (เอาข้อมูลทั้งหมดเทเข้า InfluxDB)
 points_workorder = []
 for i, row in df.iterrows():
     try: points_workorder.append(point_base("amr_workorder", row, i))
     except Exception as e: pass
 work_ok, work_err = write_in_chunks(points_workorder, "amr_workorder", chunk_size=300)
 
-# 2. WRITE ALERT
+# 2. WRITE ALERT (เอาข้อมูลเฉพาะที่ตรงเงื่อนไขแจ้งเตือนเข้าไป)
 points_alert = []
 bkk_df = df[df["_TELEPORT_"] == "BKK"]
 for i, row in bkk_df.iterrows():
@@ -166,7 +173,7 @@ for i, row in bkk_df.iterrows():
     except Exception as e: pass
 alert_ok, alert_err = write_in_chunks(points_alert, "amr_alert", chunk_size=300)
 
-# 3. WRITE OVERDUE
+# 3. WRITE OVERDUE (ยิงตัวเลขงานค้างเกิน 7 วัน เข้า Database)
 overdue_ok = 0
 now_ts = pd.Timestamp.now(tz='UTC').normalize()
 try:
@@ -179,7 +186,7 @@ except Exception as limit_err:
         write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
         overdue_ok = 1
 
-# 4. WRITE TOTAL JOBS
+# 4. WRITE TOTAL JOBS (ยิงตัวเลขจำนวนงานทั้งหมด เข้า Database)
 total_ok = 0
 try:
     p_total = Point("amr_total_jobs").field("count", int(len(df))).time(now_ts, WritePrecision.NS)
@@ -191,7 +198,7 @@ except Exception as limit_err:
         write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_total)
         total_ok = 1
 
-# 5. WRITE AREA SUMMARY 
+# 5. WRITE AREA SUMMARY (ยิงข้อมูลสรุปยอดแต่ละพื้นที่ เข้า Database)
 area_counts = df["_TELEPORT_"].value_counts()
 for area_name, count_val in area_counts.items():
     if area_name:
@@ -203,7 +210,7 @@ for area_name, count_val in area_counts.items():
                 time.sleep(15)
                 write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_area)
 
-# 6. WRITE AGE SUMMARY
+# 6. WRITE AGE SUMMARY (ยิงข้อมูลสรุปช่วงอายุงาน เข้า Database)
 age_groups = {
     "0-1 วัน": len(df[df["_DURATION_"] <= 1]),
     "2-3 วัน": len(df[(df["_DURATION_"] > 1) & (df["_DURATION_"] <= 3)]),
