@@ -53,7 +53,10 @@ problem_col = col(df, "METER_PROBLEM", "Problem", "PROBLEM")
 jobid_col = col(df, "JOBID", "JOB ID", "JobID")
 group_col = col(df, "GROUPNAME", "GROUP NAME")
 date_col = col(df, "วันที่แจ้ง", "DATE")
-duration_col = col(df, "วันที่เหลือก่อนถึงวันสุดท้าย", "จำนวนวัน", "ระยะเวลางาน", "DURATION")
+
+# ใช้คอลัมน์ "จำนวนวัน" (อายุงานเดิม) สำหรับคำนวณงานค้างและกราฟใน Grafana เพื่อไม่ให้เพี้ยน
+duration_col = col(df, "จำนวนวัน", "DURATION")
+
 used_col = col(df, "USED_NAME")
 status_col = col(df, "เช็คสถานะ", "สถานะ")
 teleport_col = col(df, "Teleport")
@@ -103,7 +106,7 @@ def point_base(measurement, row, index):
     )
 
 # =========================
-# FILTER (ปรับเงื่อนไขให้ตรงกับหน้าสรุป Excel 2 งาน)
+# FILTER
 # =========================
 closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
 is_closed = df["_STATUS_"].str.contains('|'.join(closed_keywords), regex=True)
