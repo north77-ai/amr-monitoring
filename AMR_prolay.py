@@ -53,10 +53,7 @@ problem_col = col(df, "METER_PROBLEM", "Problem", "PROBLEM")
 jobid_col = col(df, "JOBID", "JOB ID", "JobID")
 group_col = col(df, "GROUPNAME", "GROUP NAME")
 date_col = col(df, "วันที่แจ้ง", "DATE")
-
-# ใช้คอลัมน์ "จำนวนวัน" (อายุงานเดิม) สำหรับคำนวณงานค้างและกราฟใน Grafana เพื่อไม่ให้เพี้ยน
 duration_col = col(df, "จำนวนวัน", "DURATION")
-
 used_col = col(df, "USED_NAME")
 status_col = col(df, "เช็คสถานะ", "สถานะ")
 teleport_col = col(df, "Teleport")
@@ -96,9 +93,9 @@ def point_base(measurement, row, index):
     return (
         Point(measurement)
         .tag("JOBID", jid)
+        .tag("Teleport", row["_TELEPORT_"])
         .field("GROUPNAME", row["_GROUPNAME_"])
         .field("USED_NAME", row["_USED_NAME_"])
-        .field("Teleport", row["_TELEPORT_"])
         .field("รายละเอียด", row["_DETAIL_"])
         .field("METER_PROBLEM", row["_PROBLEM_"])
         .field("จำนวนวัน", float(row["_DURATION_"]))
