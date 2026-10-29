@@ -78,17 +78,15 @@ df["_SLA_SUMMARY_"] = df[sla_summary_col].fillna("").astype(str).str.strip()
 df["_DATE_"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
 df["_STATUS_"] = df[status_col].fillna("").astype(str).str.lower() if status_col else ""
 
+# ----------------- แก้ไขจุดสำคัญตรงนี้ -----------------
 def point_base(measurement, row, index):
     jid = row["_JOBID_"] or f"ROW_{index}"
-    actual_date = row["_DATE_"]
     
-    if pd.isna(actual_date):
-        t = pd.Timestamp.now(tz='UTC').normalize() + pd.to_timedelta(index, unit="ns")
-    else:
-        t = actual_date
-        if t.tzinfo is None:
-            t = t.tz_localize('UTC')
-        t = t + pd.to_timedelta(index, unit="ns")
+    # เปลี่ยนมาใช้เวลาปัจจุบันของระบบ เพื่อให้ Grafana ใช้คำสั่ง last() ดึงข้อมูลใหม่สุดได้เสมอ
+    t = pd.Timestamp.now(tz='UTC') + pd.to_timedelta(index, unit="ms")
+    
+    # เก็บวันที่แจ้งเดิมไว้เป็นข้อความ (Field) แทน เพื่อเอาไว้ดึงโชว์ในตาราง Grafana ได้เหมือนเดิม
+    date_text = row["_DATE_"].strftime("%Y-%m-%d") if pd.notna(row["_DATE_"]) else "-"
 
     return (
         Point(measurement)
@@ -98,9 +96,11 @@ def point_base(measurement, row, index):
         .field("USED_NAME", row["_USED_NAME_"])
         .field("รายละเอียด", row["_DETAIL_"])
         .field("METER_PROBLEM", row["_PROBLEM_"])
+        .field("วันที่แจ้ง", date_text)
         .field("จำนวนวัน", float(row["_DURATION_"]))
         .time(t, WritePrecision.NS)
     )
+# -------------------------------------------------------
 
 # =========================
 # FILTER
