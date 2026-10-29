@@ -9,7 +9,6 @@ app = Flask(__name__)
 LINE_TOKEN = "bnwZCoODv2oH4tOKKY9qngoA0Owf3piPTA/dOyZRX621w0FNeg3uPZaW6KjmcXj7Z2cVJarnnaINl24gdFy9hNVR6H3l9P09da/aUWG1IjNGUkHy2F2PhCVJJrfI+WBM5J76vDjbv8c6wpV4/voFgwdB04t89/1O/w1cDnyilFU="
 ALERT_USER_ID = "Ca45282f34bacd5d00cb83b10d99ad08c"
 
-# กำหนดตำแหน่งไฟล์ด้วย Relative Path รองรับ Linux บน Render
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXCEL_FILE = os.path.join(BASE_DIR, "received_files", "data.xlsx")
 LAST_ALERT_FILE = os.path.join(BASE_DIR, "last_alert.txt")
@@ -130,22 +129,22 @@ def get_jobs():
     status = col(df, "เช็คสถานะ", "สถานะ")
     area = col(df, "Teleport")
     
-    # เพิ่มคอลัมน์ "วันนี้" สำหรับการตามงาน
-    today_col = col(df, "วันนี้")
+    # ใช้คอลัมน์สรุป SLA ตามหน้าตารางสรุป Excel (ตรงกับ 2 งาน)
+    sla_summary_col = col(df, "1.สรุปติดตาม SLA1")
 
-    if not all([jobid, site, area, today_col]):
-        print("Column สำคัญไม่ครบ (ต้องการอย่างน้อย: JOBID, USED_NAME, Teleport, วันนี้)")
+    if not all([jobid, site, area, sla_summary_col]):
+        print("Column สำคัญไม่ครบ (ต้องการอย่างน้อย: JOBID, USED_NAME, Teleport, 1.สรุปติดตาม SLA1)")
         return []
 
     w = df.copy()
 
     w["_AREA_"] = w[area].fillna("").astype(str).str.strip().str.upper()
-    w["_TODAY_"] = w[today_col].fillna("").astype(str).str.strip()
+    w["_SLA_SUMMARY_"] = w[sla_summary_col].fillna("").astype(str).str.strip()
 
-    # กรองเฉพาะ BKK และ งานที่มีคำว่า "ตามวันนี้"
+    # กรองเฉพาะ BKK และตรงกับเงื่อนไขหน้าสรุป Excel "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)" (2 งาน)
     w = w[
         (w["_AREA_"] == "BKK") &
-        (w["_TODAY_"] == "ตามวันนี้")
+        (w["_SLA_SUMMARY_"] == "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)")
     ]
 
     # กรองงานที่ปิดแล้วออก (กันเหนียว)
@@ -154,7 +153,7 @@ def get_jobs():
         for kw in closed_keywords:
             w = w[~w[status].astype(str).str.lower().str.contains(kw, na=False)]
 
-    print("BKK + ตามวันนี้ (หลังกรอง):", len(w))
+    print("BKK + SLA Summary (หลังกรอง):", len(w))
 
     jobs = []
 
@@ -372,7 +371,6 @@ def webhook():
                 exist_ok=True
             )
 
-            # ลบไฟล์เก่าออกก่อน
             if os.path.exists(EXCEL_FILE):
                 try:
                     os.remove(EXCEL_FILE)

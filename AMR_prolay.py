@@ -58,9 +58,9 @@ used_col = col(df, "USED_NAME")
 status_col = col(df, "เช็คสถานะ", "สถานะ")
 teleport_col = col(df, "Teleport")
 detail_col = col(df, "รายละเอียด")
-today_col = col(df, "วันนี้") 
+sla_summary_col = col(df, "1.สรุปติดตาม SLA1")
 
-required = [jobid_col, group_col, used_col, teleport_col, detail_col, date_col, problem_col, duration_col, today_col]
+required = [jobid_col, group_col, used_col, teleport_col, detail_col, date_col, problem_col, duration_col, sla_summary_col]
 if any(c is None for c in required):
     raise SystemExit("❌ Excel ขาด Column สำคัญ")
 
@@ -74,7 +74,7 @@ df["_TELEPORT_"] = df[teleport_col].fillna("ไม่ระบุ").astype(str).
 df["_DETAIL_"] = df[detail_col].apply(clean)
 df["_PROBLEM_"] = df[problem_col].fillna("").astype(str).str.strip()
 df["_DURATION_"] = pd.to_numeric(df[duration_col], errors="coerce").fillna(0)
-df["_TODAY_"] = df[today_col].fillna("").astype(str).str.strip()
+df["_SLA_SUMMARY_"] = df[sla_summary_col].fillna("").astype(str).str.strip()
 df["_DATE_"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
 df["_STATUS_"] = df[status_col].fillna("").astype(str).str.lower() if status_col else ""
 
@@ -103,14 +103,14 @@ def point_base(measurement, row, index):
     )
 
 # =========================
-# FILTER
+# FILTER (ปรับเงื่อนไขให้ตรงกับหน้าสรุป Excel 2 งาน)
 # =========================
 closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
 is_closed = df["_STATUS_"].str.contains('|'.join(closed_keywords), regex=True)
 
 alert_df = df[
     (df["_TELEPORT_"] == "BKK") &
-    (df["_TODAY_"] == "ตามวันนี้") &
+    (df["_SLA_SUMMARY_"] == "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)") &
     (~is_closed)
 ].copy()
 
@@ -179,7 +179,7 @@ except Exception as limit_err:
         write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
         overdue_ok = 1
 
-# 4. WRITE TOTAL JOBS (ส่งยอด 4648 เข้าไปตรงๆ)
+# 4. WRITE TOTAL JOBS
 total_ok = 0
 try:
     p_total = Point("amr_total_jobs").field("count", int(len(df))).time(now_ts, WritePrecision.NS)
@@ -203,7 +203,7 @@ for area_name, count_val in area_counts.items():
                 time.sleep(15)
                 write.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p_area)
 
-# 6. WRITE AGE SUMMARY (สรุปอายุงานส่งตรง ไม่โดนบล็อก)
+# 6. WRITE AGE SUMMARY
 age_groups = {
     "0-1 วัน": len(df[df["_DURATION_"] <= 1]),
     "2-3 วัน": len(df[(df["_DURATION_"] > 1) & (df["_DURATION_"] <= 3)]),
