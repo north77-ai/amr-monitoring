@@ -78,14 +78,10 @@ df["_SLA_SUMMARY_"] = df[sla_summary_col].fillna("").astype(str).str.strip()
 df["_DATE_"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
 df["_STATUS_"] = df[status_col].fillna("").astype(str).str.lower() if status_col else ""
 
-# ----------------- แก้ไขจุดสำคัญตรงนี้ -----------------
+# ----------------- จุดสำคัญ -----------------
 def point_base(measurement, row, index):
     jid = row["_JOBID_"] or f"ROW_{index}"
-    
-    # เปลี่ยนมาใช้เวลาปัจจุบันของระบบ เพื่อให้ Grafana ใช้คำสั่ง last() ดึงข้อมูลใหม่สุดได้เสมอ
     t = pd.Timestamp.now(tz='UTC') + pd.to_timedelta(index, unit="ms")
-    
-    # เก็บวันที่แจ้งเดิมไว้เป็นข้อความ (Field) แทน เพื่อเอาไว้ดึงโชว์ในตาราง Grafana ได้เหมือนเดิม
     date_text = row["_DATE_"].strftime("%Y-%m-%d") if pd.notna(row["_DATE_"]) else "-"
 
     return (
@@ -100,7 +96,6 @@ def point_base(measurement, row, index):
         .field("จำนวนวัน", float(row["_DURATION_"]))
         .time(t, WritePrecision.NS)
     )
-# -------------------------------------------------------
 
 # =========================
 # FILTER
@@ -108,9 +103,10 @@ def point_base(measurement, row, index):
 closed_keywords = ["ปิด", "close", "completed", "เสร็จสิ้น"]
 is_closed = df["_STATUS_"].str.contains('|'.join(closed_keywords), regex=True)
 
+# กรอง 4 งานของ BKK ถูกต้องแล้ว
 alert_df = df[
     (df["_TELEPORT_"] == "BKK") &
-    (df["_SLA_SUMMARY_"] == "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)") &
+    (df["_SLA_SUMMARY_"] == "1.2.ครบกำหนดนัดหมายวันนี้(เลื่อนไม่ได้)") &
     (~is_closed)
 ].copy()
 
@@ -158,9 +154,13 @@ work_ok, work_err = write_in_chunks(points_workorder, "amr_workorder", chunk_siz
 # 2. WRITE ALERT
 points_alert = []
 bkk_df = df[df["_TELEPORT_"] == "BKK"]
+alert_count_log = 0 # สร้างตัวแปรมานับยอดปริ้นท์เช็ก
+
 for i, row in bkk_df.iterrows():
     try:
-        is_alert_val = 1 if i in alert_df.index else 0
+        is_alert_val = int(1) if i in alert_df.index else int(0)
+        if is_alert_val == 1:
+            alert_count_log += 1
         p = point_base("amr_alert", row, i).field("is_alert", is_alert_val)
         points_alert.append(p)
     except Exception as e: pass
@@ -221,4 +221,6 @@ for age_name, count_val in age_groups.items():
 
 write.close()
 client.close()
-print(f"✅ ส่งข้อมูลเข้า InfluxDB สำเร็จ!")
+
+# บรรทัดนี้จะปริ้นท์จำนวนงานที่มีปัญหาให้เห็นชัดๆ ตอนคุณรันใน VS Code
+print(f"✅ ส่งข้อมูลเข้า InfluxDB สำเร็จ! (พบงาน BKK ที่ต้อง Alert ขึ้น Grafana = {alert_count_log} งาน)")
