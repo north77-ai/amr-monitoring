@@ -135,7 +135,7 @@ def get_jobs():
     status = col(df, "เช็คสถานะ", "สถานะ")
     area = col(df, "Teleport")
     
-    # ใช้คอลัมน์สรุป SLA ตามหน้าตารางสรุป Excel (ตรงกับ 2 งาน)
+    # ใช้คอลัมน์สรุป SLA ตามหน้าตารางสรุป Excel
     sla_summary_col = col(df, "1.สรุปติดตาม SLA1")
 
     if not all([jobid, site, area, sla_summary_col]):
@@ -147,10 +147,10 @@ def get_jobs():
     w["_AREA_"] = w[area].fillna("").astype(str).str.strip().str.upper()
     w["_SLA_SUMMARY_"] = w[sla_summary_col].fillna("").astype(str).str.strip()
 
-    # กรองเฉพาะ BKK และตรงกับเงื่อนไขหน้าสรุป Excel "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)" (2 งาน)
+    # กรองเฉพาะ BKK และดึงงานเฉพาะ "1.2.ครบกำหนดนัดหมายวันนี้(เลื่อนไม่ได้)" (4 งานตามไฟล์สรุป)
     w = w[
         (w["_AREA_"] == "BKK") &
-        (w["_SLA_SUMMARY_"] == "1.1.ครบกำหนดนัดหมายวันนี้(เลื่อนได้)")
+        (w["_SLA_SUMMARY_"] == "1.2.ครบกำหนดนัดหมายวันนี้(เลื่อนไม่ได้)")
     ]
 
     # กรองงานที่ปิดแล้วออก (กันเหนียว)
